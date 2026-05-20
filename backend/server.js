@@ -93,6 +93,13 @@ function authMiddleware(req, res, next) {
 app.use(cors())
 app.use(express.json())
 
+app.get("/health", (req, res) => {
+  res.status(200).json({
+    status: "running",
+    service: "JobFusion Backend"
+  });
+});
+
 // Initialize email transport
 initEmailTransport()
 
