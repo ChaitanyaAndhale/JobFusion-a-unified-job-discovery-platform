@@ -1,0 +1,29 @@
+{
+  "name": "jobfusion-backend",
+  "version": "1.0.0",
+  "description": "JobFusion scraping backend - aggregates jobs from LinkedIn, Indeed, Naukri, Glassdoor & more",
+  "main": "server.js",
+  "type": "module",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js",
+    "scrape": "node scripts/scrapeAll.js"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.106.0",
+    "axios": "^1.7.0",
+    "bcryptjs": "^3.0.3",
+    "cheerio": "^1.0.0",
+    "cors": "^2.8.5",
+    "dotenv": "^17.4.2",
+    "express": "^4.21.0",
+    "jsonwebtoken": "^9.0.3",
+    "mammoth": "^1.12.0",
+    "multer": "^2.1.1",
+    "node-cron": "^3.0.3",
+    "nodemailer": "^8.0.7",
+    "pdf-parse": "^2.4.5",
+    "rss-parser": "^3.13.0",
+    "user-agents": "^1.1.0"
+  }
+}

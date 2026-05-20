@@ -1,0 +1,71 @@
+[
+  {
+    "id": "user-1779262369396",
+    "name": "Test User",
+    "email": "test@jobfusion.com",
+    "password": "$2b$10$btjsbAGS273S6dFQBfKUzOscQwbbfAXEwpeToXjL2uDUN5n6QkBeu",
+    "phone": "+91 9876543210",
+    "title": "Job Seeker",
+    "location": "",
+    "skills": [],
+    "resumeText": "",
+    "resumeFileName": "",
+    "resumeUploaded": false,
+    "experienceLevel": "",
+    "preferredLocation": "",
+    "github": "",
+    "linkedin": "",
+    "portfolio": "",
+    "notificationPrefs": {
+      "email": true,
+      "sms": false,
+      "frequency": "daily",
+      "minMatchScore": 50
+    },
+    "savedJobsList": [],
+    "savedJobsCount": 0,
+    "appliedJobsCount": 0,
+    "joinedDate": "2026-05-20",
+    "profileCompletion": 25,
+    "createdAt": "2026-05-20T07:32:49.396Z"
+  },
+  {
+    "id": "user-1779264870235",
+    "name": "chaitanya andhale",
+    "email": "chaitanyaandhale6@gmail.com",
+    "password": "$2b$10$cq1oTC0wRI0a8qrGQB498uJkQvy4j.3OKPTfmdHrKz8OIECRePlxG",
+    "phone": "9209591382",
+    "title": "Job Seeker",
+    "location": "pune",
+    "skills": [],
+    "resumeText": "",
+    "resumeFileName": "chaitanyaimpr (19).pdf",
+    "resumeUploaded": true,
+    "experienceLevel": "Mid (3-5 yrs)",
+    "preferredLocation": "",
+    "github": "",
+    "linkedin": "",
+    "portfolio": "",
+    "notificationPrefs": {
+      "email": true,
+      "sms": true,
+      "frequency": "weekly",
+      "minMatchScore": 50
+    },
+    "savedJobsList": [],
+    "savedJobsCount": 0,
+    "appliedJobsCount": 0,
+    "joinedDate": "2026-05-20",
+    "profileCompletion": 25,
+    "createdAt": "2026-05-20T08:14:30.236Z",
+    "resumeAnalysis": {
+      "skills": [],
+      "experienceLevel": "Mid (3-5 yrs)",
+      "yearsOfExperience": null,
+      "roles": [],
+      "education": [],
+      "location": null,
+      "analyzedAt": "2026-05-20T13:33:11.397Z"
+    }
+  }
+]
