@@ -4,7 +4,7 @@ import { fetchResumeInsights as fetchResumeInsightsAPI, applyToJob as applyToJob
 
 const AuthContext = createContext()
 
-const API = import.meta.env.PROD ? '' : ''
+const API = import.meta.env.VITE_API_URL || (import.meta.env.PROD ? '' : 'http://localhost:3001')
 
 export function AuthProvider({ children }) {
   const [user, setUser] = useState(null)

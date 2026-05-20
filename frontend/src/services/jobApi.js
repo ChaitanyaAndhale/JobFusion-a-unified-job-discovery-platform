@@ -1,7 +1,7 @@
 // Job API Service - Connects to the JobFusion backend
 // Smart search with multi-keyword, partial matching, relevancy ranking
 
-const API_BASE = import.meta.env.PROD ? '' : ''
+const API_BASE = import.meta.env.VITE_API_URL || (import.meta.env.PROD ? '' : 'http://localhost:3001')
 
 /**
  * Fetch real-time dashboard stats (replaces all mock dashboard data)
