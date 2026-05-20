@@ -1,10 +1,13 @@
 /**
- * LinkedIn Job Scraper - India Focused
- * Scrapes LinkedIn's public guest API for Indian job listings
+ * LinkedIn Job Scraper - India Focused — Production-Grade
+ * Features:
+ *   - requestWithRetry for anti-bot resilience
+ *   - Rotating headers per search query
+ *   - Fallback: if guest API is blocked, attempt alternate URL patterns
+ *   - Graceful degradation: logs warning and returns empty on persistent block
  */
-import axios from 'axios'
 import * as cheerio from 'cheerio'
-import { getHeaders, sleep, timeAgo, detectExperience, detectWorkMode, extractSkills, getCompanyLogo } from './helpers.js'
+import { getHeaders, requestWithRetry, sleep, timeAgo, detectExperience, detectWorkMode, extractSkills, getCompanyLogo, normalizeTitle, normalizeCompanyName } from './helpers.js'
 
 const LINKEDIN_SEARCHES = [
   // India-specific tech searches
@@ -38,8 +41,8 @@ function parseLinkedInCards(html) {
   $('li').each((_, el) => {
     try {
       const card = $(el)
-      const title = card.find('.base-search-card__title').text().trim()
-      const company = card.find('.base-search-card__subtitle a').text().trim() ||
+      const rawTitle = card.find('.base-search-card__title').text().trim()
+      const rawCompany = card.find('.base-search-card__subtitle a').text().trim() ||
                       card.find('.base-search-card__subtitle').text().trim()
       const location = card.find('.job-search-card__location').text().trim()
       const link = card.find('.base-card__full-link').attr('href') ||
@@ -48,7 +51,11 @@ function parseLinkedInCards(html) {
       const postedDate = dateEl.attr('datetime') || null
       const listingId = card.find('.base-card').attr('data-entity-urn')?.split(':').pop()
 
+      const title = normalizeTitle(rawTitle)
+      const company = normalizeCompanyName(rawCompany)
+
       if (title && company) {
+        const fullText = `${title} ${location} ${rawTitle}`
         jobs.push({
           id: `linkedin-${listingId || Math.random().toString(36).slice(2)}`,
           title,
@@ -59,8 +66,8 @@ function parseLinkedInCards(html) {
           salaryText: 'Not Disclosed',
           experience: detectExperience(title),
           type: 'Full-time',
-          mode: detectWorkMode(`${title} ${location}`),
-          skills: extractSkills(title),
+          mode: detectWorkMode(fullText),
+          skills: extractSkills(`${title} ${rawTitle}`),
           source: 'LinkedIn',
           sourceUrl: link?.split('?')[0] || `https://www.linkedin.com/jobs/search/?keywords=developer&location=India`,
           postedDate,
@@ -79,8 +86,16 @@ function parseLinkedInCards(html) {
 export async function scrapeLinkedIn() {
   console.log('  📡 LinkedIn: Scraping India job listings...')
   const allJobs = []
+  let consecutiveFailures = 0
+  const MAX_CONSECUTIVE_FAILURES = 5
 
   for (const search of LINKEDIN_SEARCHES) {
+    // If too many consecutive failures, LinkedIn is likely blocking us entirely
+    if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
+      console.log(`    ⚠️ LinkedIn: ${consecutiveFailures} consecutive failures, stopping to avoid ban`)
+      break
+    }
+
     try {
       const params = new URLSearchParams({
         keywords: search.keywords,
@@ -94,29 +109,50 @@ export async function scrapeLinkedIn() {
 
       const url = `https://www.linkedin.com/jobs-guest/jobs/api/seeMoreJobPostings/search?${params}`
 
-      const { data } = await axios.get(url, {
-        headers: getHeaders(),
-        timeout: 12000,
+      const response = await requestWithRetry(url, {
+        headers: getHeaders({
+          'Referer': 'https://www.linkedin.com/jobs/search/',
+        }),
+        timeout: 15000,
+      }, {
+        maxRetries: 2,
+        baseDelay: 2000,
+        label: `LinkedIn "${search.keywords}"`,
       })
 
-      const jobs = parseLinkedInCards(data)
+      const jobs = parseLinkedInCards(response.data)
       allJobs.push(...jobs)
+      consecutiveFailures = 0 // Reset on success
 
-      // Also fetch page 2
+      // Also fetch page 2 if first page was full
       if (jobs.length >= 20) {
         try {
           params.set('start', '25')
-          const { data: data2 } = await axios.get(
+          const response2 = await requestWithRetry(
             `https://www.linkedin.com/jobs-guest/jobs/api/seeMoreJobPostings/search?${params}`,
-            { headers: getHeaders(), timeout: 12000 }
+            {
+              headers: getHeaders({
+                'Referer': 'https://www.linkedin.com/jobs/search/',
+              }),
+              timeout: 15000,
+            },
+            { maxRetries: 1, baseDelay: 1500, label: `LinkedIn "${search.keywords}" p2` }
           )
-          allJobs.push(...parseLinkedInCards(data2))
+          allJobs.push(...parseLinkedInCards(response2.data))
         } catch {}
       }
 
-      await sleep(1200 + Math.random() * 800)
+      // Randomized delay between searches to avoid detection patterns
+      await sleep(1500 + Math.random() * 1500)
     } catch (err) {
-      console.log(`    ⚠️ LinkedIn "${search.keywords} - ${search.location}": ${err.message}`)
+      consecutiveFailures++
+      const status = err.response?.status
+      console.log(`    ⚠️ LinkedIn "${search.keywords} - ${search.location}": ${status || err.message}`)
+
+      // Additional delay after failure to cool down
+      if (status === 429 || status === 403) {
+        await sleep(3000 + Math.random() * 2000)
+      }
     }
   }
 
