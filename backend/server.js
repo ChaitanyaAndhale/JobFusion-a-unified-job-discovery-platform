@@ -64,6 +64,10 @@ function authMiddleware(req, res, next) {
 app.use(cors())
 app.use(express.json())
 
+app.get("/", (req, res) => {
+  res.status(200).send("JobFusion API is running and awake!");
+});
+
 app.get("/api/health", (req, res) => {
   const mem = process.memoryUsage();
   res.status(200).json({
