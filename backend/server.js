@@ -17,7 +17,7 @@ import jwt from 'jsonwebtoken'
 import { scrapeAll, getCache, getCacheStats } from './scrapers/index.js'
 import { findMatchingJobs, extractSkillsFromText, analyzeResume, generateDashboardData, getResumeMatchReport, editDistance } from './services/jobMatcher.js'
 import { initEmailTransport, sendJobMatchEmail, sendWelcomeEmail, sendSMSNotification } from './services/notifier.js'
-
+import { supabase } from './lib/supabase.js'
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const app = express()
 const PORT = process.env.PORT || 3001
@@ -42,36 +42,7 @@ const upload = multer({
   },
 })
 
-// ─── User Store (JSON file-based for portability) ───────────
-const USERS_FILE = path.join(__dirname, 'data', 'users.json')
-const NOTIF_LOG_FILE = path.join(__dirname, 'data', 'notifications.json')
-
-// Ensure data directory
-if (!fs.existsSync(path.join(__dirname, 'data'))) {
-  fs.mkdirSync(path.join(__dirname, 'data'), { recursive: true })
-}
-
-function loadUsers() {
-  try {
-    if (fs.existsSync(USERS_FILE)) return JSON.parse(fs.readFileSync(USERS_FILE, 'utf-8'))
-  } catch { }
-  return []
-}
-
-function saveUsers(users) {
-  fs.writeFileSync(USERS_FILE, JSON.stringify(users, null, 2))
-}
-
-function loadNotifLog() {
-  try {
-    if (fs.existsSync(NOTIF_LOG_FILE)) return JSON.parse(fs.readFileSync(NOTIF_LOG_FILE, 'utf-8'))
-  } catch { }
-  return []
-}
-
-function saveNotifLog(log) {
-  fs.writeFileSync(NOTIF_LOG_FILE, JSON.stringify(log, null, 2))
-}
+// ─── User Database connection is now managed via Supabase ───────────
 
 // ─── Auth Middleware ─────────────────────────────────────────
 
@@ -107,6 +78,41 @@ initEmailTransport()
 // AUTH API ROUTES
 // ═══════════════════════════════════════════════════════════
 
+function mapUserToCamelCase(dbUser) {
+  if (!dbUser) return null;
+  return {
+    id: dbUser.id,
+    name: dbUser.name,
+    email: dbUser.email,
+    phone: dbUser.phone,
+    title: dbUser.title,
+    location: dbUser.location,
+    skills: dbUser.skills || [],
+    resumeText: dbUser.resume_text || '',
+    resumeFileName: dbUser.resume_file_name || '',
+    resumeUploaded: dbUser.resume_uploaded || false,
+    experienceLevel: dbUser.experience_level || '',
+    preferredLocation: dbUser.preferred_location || '',
+    avatar: dbUser.avatar || '',
+    github: dbUser.github || '',
+    linkedin: dbUser.linkedin || '',
+    portfolio: dbUser.portfolio || '',
+    notificationPrefs: dbUser.notification_prefs || {
+      email: true, sms: false, frequency: 'daily', minMatchScore: 50
+    },
+    savedJobsCount: dbUser.saved_jobs_count || 0,
+    appliedJobsCount: dbUser.applied_jobs_count || 0,
+    joinedDate: dbUser.joined_date,
+    profileCompletion: dbUser.profile_completion || 25,
+    resumeAnalysis: dbUser.resume_analysis || null,
+    createdAt: dbUser.created_at,
+  };
+}
+
+/**
+ * POST /api/auth/signup — Create a new account
+ */
+
 /**
  * POST /api/auth/signup — Create a new account
  */
@@ -117,14 +123,14 @@ app.post('/api/auth/signup', async (req, res) => {
       return res.status(400).json({ success: false, error: 'Name, email, and password are required' })
     }
 
-    const users = loadUsers()
-    if (users.find(u => u.email === email)) {
+    const { data: existingUser } = await supabase.from('users').select('id').eq('email', email).single()
+    if (existingUser) {
       return res.status(409).json({ success: false, error: 'An account with this email already exists' })
     }
 
     const hashedPassword = await bcrypt.hash(password, 10)
-    const newUser = {
-      id: `user-${Date.now()}`,
+    
+    const { data: newUser, error } = await supabase.from('users').insert([{
       name,
       email,
       password: hashedPassword,
@@ -132,38 +138,33 @@ app.post('/api/auth/signup', async (req, res) => {
       title: 'Job Seeker',
       location: '',
       skills: [],
-      resumeText: '',
-      resumeFileName: '',
-      resumeUploaded: false,
-      experienceLevel: '',
-      preferredLocation: '',
+      resume_text: '',
+      resume_file_name: '',
+      resume_uploaded: false,
+      experience_level: '',
+      preferred_location: '',
       github: '',
       linkedin: '',
       portfolio: '',
-      notificationPrefs: {
+      notification_prefs: {
         email: true,
         sms: false,
-        frequency: 'daily', // 'realtime' | 'daily' | 'weekly'
+        frequency: 'daily',
         minMatchScore: 50,
       },
-      savedJobsList: [],
-      savedJobsCount: 0,
-      appliedJobsCount: 0,
-      joinedDate: new Date().toISOString().split('T')[0],
-      profileCompletion: 25,
-      createdAt: new Date().toISOString(),
-    }
+      saved_jobs_count: 0,
+      applied_jobs_count: 0,
+      profile_completion: 25
+    }]).select().single()
 
-    users.push(newUser)
-    saveUsers(users)
+    if (error) throw error
 
     const token = jwt.sign({ userId: newUser.id }, JWT_SECRET, { expiresIn: '30d' })
 
     // Send welcome email (non-blocking)
     sendWelcomeEmail(email, name).catch(() => {})
 
-    const { password: _, ...userSafe } = newUser
-    res.json({ success: true, token, user: userSafe })
+    res.json({ success: true, token, user: mapUserToCamelCase(newUser) })
   } catch (err) {
     res.status(500).json({ success: false, error: err.message })
   }
@@ -179,9 +180,8 @@ app.post('/api/auth/login', async (req, res) => {
       return res.status(400).json({ success: false, error: 'Email and password are required' })
     }
 
-    const users = loadUsers()
-    const user = users.find(u => u.email === email)
-    if (!user) {
+    const { data: user, error } = await supabase.from('users').select('*').eq('email', email).single()
+    if (!user || error) {
       return res.status(401).json({ success: false, error: 'Invalid email or password' })
     }
 
@@ -191,8 +191,7 @@ app.post('/api/auth/login', async (req, res) => {
     }
 
     const token = jwt.sign({ userId: user.id }, JWT_SECRET, { expiresIn: '30d' })
-    const { password: _, ...userSafe } = user
-    res.json({ success: true, token, user: userSafe })
+    res.json({ success: true, token, user: mapUserToCamelCase(user) })
   } catch (err) {
     res.status(500).json({ success: false, error: err.message })
   }
@@ -208,13 +207,10 @@ app.post('/api/auth/google', async (req, res) => {
       return res.status(400).json({ success: false, error: 'Email is required' })
     }
 
-    const users = loadUsers()
-    let user = users.find(u => u.email === email)
+    let { data: user } = await supabase.from('users').select('*').eq('email', email).single()
 
     if (!user) {
-      // Auto-create account for Google users
-      user = {
-        id: `user-${Date.now()}`,
+      const { data: newUser, error } = await supabase.from('users').insert([{
         name: name || email.split('@')[0],
         email,
         password: '', // No password for OAuth users
@@ -222,36 +218,33 @@ app.post('/api/auth/google', async (req, res) => {
         title: 'Job Seeker',
         location: '',
         skills: [],
-        resumeText: '',
-        resumeFileName: '',
-        resumeUploaded: false,
-        experienceLevel: '',
-        preferredLocation: '',
+        resume_text: '',
+        resume_file_name: '',
+        resume_uploaded: false,
+        experience_level: '',
+        preferred_location: '',
         avatar: picture || null,
         github: '',
         linkedin: '',
         portfolio: '',
-        notificationPrefs: {
+        notification_prefs: {
           email: true,
           sms: false,
           frequency: 'daily',
           minMatchScore: 50,
         },
-        savedJobsList: [],
-        savedJobsCount: 0,
-        appliedJobsCount: 0,
-        joinedDate: new Date().toISOString().split('T')[0],
-        profileCompletion: 25,
-        createdAt: new Date().toISOString(),
-      }
-      users.push(user)
-      saveUsers(users)
+        saved_jobs_count: 0,
+        applied_jobs_count: 0,
+        profile_completion: 25
+      }]).select().single()
+      
+      if (error) throw error
+      user = newUser
       sendWelcomeEmail(email, user.name).catch(() => {})
     }
 
     const token = jwt.sign({ userId: user.id }, JWT_SECRET, { expiresIn: '30d' })
-    const { password: _, ...userSafe } = user
-    res.json({ success: true, token, user: userSafe })
+    res.json({ success: true, token, user: mapUserToCamelCase(user) })
   } catch (err) {
     res.status(500).json({ success: false, error: err.message })
   }
@@ -260,35 +253,36 @@ app.post('/api/auth/google', async (req, res) => {
 /**
  * GET /api/auth/me — Get current user profile
  */
-app.get('/api/auth/me', authMiddleware, (req, res) => {
-  const users = loadUsers()
-  const user = users.find(u => u.id === req.userId)
-  if (!user) return res.status(404).json({ success: false, error: 'User not found' })
+app.get('/api/auth/me', authMiddleware, async (req, res) => {
+  const { data: user, error } = await supabase.from('users').select('*').eq('id', req.userId).single()
+  if (!user || error) return res.status(404).json({ success: false, error: 'User not found' })
 
-  const { password: _, ...userSafe } = user
-  res.json({ success: true, user: userSafe })
+  res.json({ success: true, user: mapUserToCamelCase(user) })
 })
 
 /**
  * PUT /api/profile — Update user profile
  */
-app.put('/api/profile', authMiddleware, (req, res) => {
-  const users = loadUsers()
-  const idx = users.findIndex(u => u.id === req.userId)
-  if (idx === -1) return res.status(404).json({ success: false, error: 'User not found' })
-
+app.put('/api/profile', authMiddleware, async (req, res) => {
   const updates = req.body
-  // Don't allow overwriting critical fields
-  delete updates.id
-  delete updates.password
-  delete updates.email
-  delete updates.createdAt
+  const dbUpdates = {}
+  
+  if (updates.name !== undefined) dbUpdates.name = updates.name
+  if (updates.phone !== undefined) dbUpdates.phone = updates.phone
+  if (updates.title !== undefined) dbUpdates.title = updates.title
+  if (updates.location !== undefined) dbUpdates.location = updates.location
+  if (updates.skills !== undefined) dbUpdates.skills = updates.skills
+  if (updates.experienceLevel !== undefined) dbUpdates.experience_level = updates.experienceLevel
+  if (updates.preferredLocation !== undefined) dbUpdates.preferred_location = updates.preferredLocation
+  if (updates.github !== undefined) dbUpdates.github = updates.github
+  if (updates.linkedin !== undefined) dbUpdates.linkedin = updates.linkedin
+  if (updates.portfolio !== undefined) dbUpdates.portfolio = updates.portfolio
+  if (updates.notificationPrefs !== undefined) dbUpdates.notification_prefs = updates.notificationPrefs
 
-  users[idx] = { ...users[idx], ...updates }
-  saveUsers(users)
+  const { data: updatedUser, error } = await supabase.from('users').update(dbUpdates).eq('id', req.userId).select().single()
+  if (error || !updatedUser) return res.status(404).json({ success: false, error: 'User not found' })
 
-  const { password: _, ...userSafe } = users[idx]
-  res.json({ success: true, user: userSafe })
+  res.json({ success: true, user: mapUserToCamelCase(updatedUser) })
 })
 
 // ═══════════════════════════════════════════════════════════
@@ -336,47 +330,47 @@ app.post('/api/profile/resume', authMiddleware, upload.single('resume'), async (
     const analysis = analyzeResume(resumeText)
 
     // Update user profile with analysis results
-    const users = loadUsers()
-    const idx = users.findIndex(u => u.id === req.userId)
-    if (idx === -1) return res.status(404).json({ success: false, error: 'User not found' })
+    const { data: user, error: fetchErr } = await supabase.from('users').select('*').eq('id', req.userId).single()
+    if (!user || fetchErr) return res.status(404).json({ success: false, error: 'User not found' })
 
-    users[idx].resumeText = resumeText.substring(0, 8000)
-    users[idx].resumeFileName = req.file.originalname
-    users[idx].resumeUploaded = true
-    users[idx].skills = [...new Set([...users[idx].skills, ...analysis.skills])]
+    const updatedSkills = [...new Set([...(user.skills || []), ...analysis.skills])]
+    const dbUpdates = {
+      resume_text: resumeText.substring(0, 8000),
+      resume_file_name: req.file.originalname,
+      resume_uploaded: true,
+      skills: updatedSkills,
+      resume_analysis: {
+        skills: analysis.skills,
+        experienceLevel: analysis.experienceLevel,
+        yearsOfExperience: analysis.yearsOfExperience,
+        roles: analysis.roles,
+        education: analysis.education,
+        location: analysis.location,
+        analyzedAt: new Date().toISOString(),
+      }
+    }
+
     // Auto-set fields from resume analysis if not already set
-    if (analysis.experienceLevel && (!users[idx].experienceLevel || users[idx].experienceLevel === '')) {
-      users[idx].experienceLevel = analysis.experienceLevel
+    if (analysis.experienceLevel && (!user.experience_level || user.experience_level === '')) {
+      dbUpdates.experience_level = analysis.experienceLevel
     }
-    if (analysis.location && !users[idx].location) {
-      users[idx].location = analysis.location
+    if (analysis.location && !user.location) {
+      dbUpdates.location = analysis.location
     }
-    if (analysis.roles && analysis.roles.length > 0 && (!users[idx].title || users[idx].title === 'Job Seeker')) {
-      // Capitalize role name
-      const topRole = analysis.roles[0].split(' ').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ')
-      users[idx].title = topRole
+    if (analysis.roles && analysis.roles.length > 0 && (!user.title || user.title === 'Job Seeker')) {
+      dbUpdates.title = analysis.roles[0].split(' ').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ')
     }
-    // Store analysis for later use
-    users[idx].resumeAnalysis = {
-      skills: analysis.skills,
-      experienceLevel: analysis.experienceLevel,
-      yearsOfExperience: analysis.yearsOfExperience,
-      roles: analysis.roles,
-      education: analysis.education,
-      location: analysis.location,
-      analyzedAt: new Date().toISOString(),
-    }
-    saveUsers(users)
+
+    const { data: updatedUser, error: updateErr } = await supabase.from('users').update(dbUpdates).eq('id', req.userId).select().single()
 
     // Clean up uploaded file after parsing
     try { fs.unlinkSync(filePath) } catch { }
 
-    const { password: _, ...userSafe } = users[idx]
     res.json({
       success: true,
-      user: userSafe,
+      user: mapUserToCamelCase(updatedUser),
       extractedSkills: analysis.skills,
-      analysis: users[idx].resumeAnalysis,
+      analysis: dbUpdates.resume_analysis,
       message: `Resume analyzed! Found ${analysis.skills.length} skills, detected ${analysis.experienceLevel} level${analysis.roles.length > 0 ? `, best role: ${analysis.roles[0]}` : ''}.`,
     })
   } catch (err) {
@@ -391,21 +385,20 @@ app.post('/api/profile/resume', authMiddleware, upload.single('resume'), async (
 /**
  * GET /api/matches — Get matched jobs for current user
  */
-app.get('/api/matches', authMiddleware, (req, res) => {
+app.get('/api/matches', authMiddleware, async (req, res) => {
   try {
-    const users = loadUsers()
-    const user = users.find(u => u.id === req.userId)
-    if (!user) return res.status(404).json({ success: false, error: 'User not found' })
+    const { data: user, error } = await supabase.from('users').select('*').eq('id', req.userId).single()
+    if (!user || error) return res.status(404).json({ success: false, error: 'User not found' })
 
     const allJobs = getCache()
     const threshold = parseInt(req.query.threshold || '30')
-    const matches = findMatchingJobs(allJobs, user, threshold)
+    const matches = findMatchingJobs(allJobs, mapUserToCamelCase(user), threshold)
 
     res.json({
       success: true,
       matches: matches.slice(0, 50),
       total: matches.length,
-      userSkills: user.skills,
+      userSkills: user.skills || [],
     })
   } catch (err) {
     res.status(500).json({ success: false, error: err.message })
@@ -415,14 +408,13 @@ app.get('/api/matches', authMiddleware, (req, res) => {
 /**
  * GET /api/dashboard/stats — Real-time dashboard analytics
  */
-app.get('/api/dashboard/stats', authMiddleware, (req, res) => {
+app.get('/api/dashboard/stats', authMiddleware, async (req, res) => {
   try {
-    const users = loadUsers()
-    const user = users.find(u => u.id === req.userId)
-    if (!user) return res.status(404).json({ success: false, error: 'User not found' })
+    const { data: user, error } = await supabase.from('users').select('*').eq('id', req.userId).single()
+    if (!user || error) return res.status(404).json({ success: false, error: 'User not found' })
 
     const allJobs = getCache()
-    const dashboard = generateDashboardData(user, allJobs)
+    const dashboard = generateDashboardData(mapUserToCamelCase(user), allJobs)
 
     res.json({ success: true, ...dashboard })
   } catch (err) {
@@ -433,14 +425,13 @@ app.get('/api/dashboard/stats', authMiddleware, (req, res) => {
 /**
  * GET /api/resume/insights — Detailed resume match report
  */
-app.get('/api/resume/insights', authMiddleware, (req, res) => {
+app.get('/api/resume/insights', authMiddleware, async (req, res) => {
   try {
-    const users = loadUsers()
-    const user = users.find(u => u.id === req.userId)
-    if (!user) return res.status(404).json({ success: false, error: 'User not found' })
+    const { data: user, error } = await supabase.from('users').select('*').eq('id', req.userId).single()
+    if (!user || error) return res.status(404).json({ success: false, error: 'User not found' })
 
     const allJobs = getCache()
-    const report = getResumeMatchReport(user, allJobs)
+    const report = getResumeMatchReport(mapUserToCamelCase(user), allJobs)
 
     res.json({ success: true, ...report })
   } catch (err) {
@@ -451,40 +442,36 @@ app.get('/api/resume/insights', authMiddleware, (req, res) => {
 /**
  * POST /api/jobs/apply — Track a job application
  */
-app.post('/api/jobs/apply', authMiddleware, (req, res) => {
+app.post('/api/jobs/apply', authMiddleware, async (req, res) => {
   try {
     const { jobId, title, company, location, source, applyUrl } = req.body
     if (!jobId || !title) return res.status(400).json({ success: false, error: 'Job ID and title are required' })
 
-    const users = loadUsers()
-    const idx = users.findIndex(u => u.id === req.userId)
-    if (idx === -1) return res.status(404).json({ success: false, error: 'User not found' })
+    const { data: user, error } = await supabase.from('users').select('id, applied_jobs_count').eq('id', req.userId).single()
+    if (!user || error) return res.status(404).json({ success: false, error: 'User not found' })
 
-    // Initialize appliedJobs array if not exists
-    if (!users[idx].appliedJobs) users[idx].appliedJobs = []
-
-    // Check if already applied
-    if (users[idx].appliedJobs.some(j => j.jobId === jobId)) {
+    const { data: existingApp } = await supabase.from('applied_jobs').select('id').eq('user_id', req.userId).eq('job_id', jobId).single()
+    if (existingApp) {
       return res.status(409).json({ success: false, error: 'Already applied to this job' })
     }
 
-    const application = {
-      jobId,
+    const { data: application, error: appErr } = await supabase.from('applied_jobs').insert([{
+      user_id: req.userId,
+      job_id: jobId,
       title,
       company: company || 'Unknown',
       location: location || '',
       source: source || 'Unknown',
-      applyUrl: applyUrl || '',
-      status: 'applied',
-      appliedAt: new Date().toISOString(),
-    }
+      apply_url: applyUrl || '',
+      status: 'applied'
+    }]).select().single()
+    
+    if (appErr) throw appErr
 
-    users[idx].appliedJobs.push(application)
-    users[idx].appliedJobsCount = users[idx].appliedJobs.length
-    saveUsers(users)
+    const newCount = (user.applied_jobs_count || 0) + 1
+    const { data: updatedUser } = await supabase.from('users').update({ applied_jobs_count: newCount }).eq('id', req.userId).select().single()
 
-    const { password: _, ...userSafe } = users[idx]
-    res.json({ success: true, application, user: userSafe, message: 'Application tracked!' })
+    res.json({ success: true, application, user: mapUserToCamelCase(updatedUser), message: 'Application tracked!' })
   } catch (err) {
     res.status(500).json({ success: false, error: err.message })
   }
@@ -495,22 +482,22 @@ app.post('/api/jobs/apply', authMiddleware, (req, res) => {
  */
 app.post('/api/notifications/test', authMiddleware, async (req, res) => {
   try {
-    const users = loadUsers()
-    const user = users.find(u => u.id === req.userId)
-    if (!user) return res.status(404).json({ success: false, error: 'User not found' })
+    const { data: user, error } = await supabase.from('users').select('*').eq('id', req.userId).single()
+    if (!user || error) return res.status(404).json({ success: false, error: 'User not found' })
 
     const allJobs = getCache()
-    const matches = findMatchingJobs(allJobs, user, user.notificationPrefs?.minMatchScore || 50)
+    const mappedUser = mapUserToCamelCase(user)
+    const matches = findMatchingJobs(allJobs, mappedUser, mappedUser.notificationPrefs?.minMatchScore || 50)
 
     const results = { email: false, sms: false }
 
-    if (user.notificationPrefs?.email !== false) {
-      results.email = await sendJobMatchEmail(user.email, user.name, matches.slice(0, 5))
+    if (mappedUser.notificationPrefs?.email !== false) {
+      results.email = await sendJobMatchEmail(mappedUser.email, mappedUser.name, matches.slice(0, 5))
     }
 
-    if (user.notificationPrefs?.sms && user.phone) {
+    if (mappedUser.notificationPrefs?.sms && mappedUser.phone) {
       const msg = `JobFusion: ${matches.length} new jobs match your profile! Top: ${matches[0]?.title} at ${matches[0]?.company}. Check your dashboard.`
-      results.sms = await sendSMSNotification(user.phone, msg)
+      results.sms = await sendSMSNotification(mappedUser.phone, msg)
     }
 
     res.json({
@@ -530,11 +517,16 @@ app.post('/api/notifications/test', authMiddleware, async (req, res) => {
  * Automated: Check all users for matches after each scrape
  */
 async function checkAllUserMatches() {
-  const users = loadUsers()
-  const allJobs = getCache()
-  const notifLog = loadNotifLog()
+  const { data: users, error } = await supabase.from('users').select('*')
+  if (error || !users) return
 
-  for (const user of users) {
+  const allJobs = getCache()
+  const yesterday = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString()
+  
+  const { data: recentNotifs } = await supabase.from('notifications_log').select('*').gt('sent_at', yesterday)
+
+  for (const dbUser of users) {
+    const user = mapUserToCamelCase(dbUser)
     if (!user.skills || user.skills.length === 0) continue
     if (!user.notificationPrefs || user.notificationPrefs.email === false) continue
 
@@ -543,11 +535,8 @@ async function checkAllUserMatches() {
     if (matches.length === 0) continue
 
     // Check if we already notified for these jobs recently (last 24h)
-    const recentNotifs = notifLog.filter(
-      n => n.userId === user.id && (Date.now() - new Date(n.sentAt).getTime()) < 24 * 60 * 60 * 1000
-    )
-
-    const notifiedJobIds = new Set(recentNotifs.flatMap(n => n.jobIds || []))
+    const userNotifs = (recentNotifs || []).filter(n => n.user_id === user.id)
+    const notifiedJobIds = new Set(userNotifs.flatMap(n => n.job_ids || []))
     const newMatches = matches.filter(j => !notifiedJobIds.has(j.id))
 
     if (newMatches.length === 0) continue
@@ -556,13 +545,12 @@ async function checkAllUserMatches() {
     if (user.notificationPrefs.email !== false) {
       const sent = await sendJobMatchEmail(user.email, user.name, newMatches.slice(0, 5))
       if (sent) {
-        notifLog.push({
-          userId: user.id,
+        await supabase.from('notifications_log').insert([{
+          user_id: user.id,
           type: 'email',
-          jobIds: newMatches.slice(0, 5).map(j => j.id),
-          matchCount: newMatches.length,
-          sentAt: new Date().toISOString(),
-        })
+          job_ids: newMatches.slice(0, 5).map(j => j.id),
+          match_count: newMatches.length
+        }])
       }
     }
 
@@ -571,17 +559,14 @@ async function checkAllUserMatches() {
       const msg = `🚀 JobFusion: ${newMatches.length} new jobs match your skills! Top: ${newMatches[0]?.title} at ${newMatches[0]?.company}. Check your dashboard!`
       const sent = await sendSMSNotification(user.phone, msg)
       if (sent) {
-        notifLog.push({
-          userId: user.id,
+        await supabase.from('notifications_log').insert([{
+          user_id: user.id,
           type: 'sms',
-          matchCount: newMatches.length,
-          sentAt: new Date().toISOString(),
-        })
+          match_count: newMatches.length
+        }])
       }
     }
   }
-
-  saveNotifLog(notifLog)
 }
 
 // ═══════════════════════════════════════════════════════════
