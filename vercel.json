@@ -6,17 +6,14 @@
       "use": "@vercel/vite"
     }
   ],
-  "routes": [
+  "rewrites": [
     {
-      "src": "/api/(.*)",
-      "dest": "https://jobfusion-a-unified-job-discovery.onrender.com/api/$1"
+      "source": "/api/:match*",
+      "destination": "https://jobfusion-a-unified-job-discovery.onrender.com/api/:match*"
     },
     {
-      "handle": "filesystem"
-    },
-    {
-      "src": "/(.*)",
-      "dest": "/frontend/dist/index.html"
+      "source": "/(.*)",
+      "destination": "/frontend/dist/index.html"
     }
   ]
 }
