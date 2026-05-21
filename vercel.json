@@ -2,10 +2,6 @@
   "version": 2,
   "builds": [
     {
-      "src": "backend/server.js",
-      "use": "@vercel/node"
-    },
-    {
       "src": "frontend/package.json",
       "use": "@vercel/vite"
     }
@@ -13,7 +9,7 @@
   "routes": [
     {
       "src": "/api/(.*)",
-      "dest": "/backend/server.js"
+      "dest": "https://jobfusion-a-unified-job-discovery.onrender.com/api/$1"
     },
     {
       "src": "/(.*)",
