@@ -270,8 +270,8 @@ export function scoreJobMatch(job, userProfile) {
   // ── 3. Experience Level (15 pts) ────────────────────────
   let expScore = 0
   if (userProfile.experienceLevel && job.experience) {
-    const userExp = userProfile.experienceLevel.toLowerCase()
-    const jobExp = job.experience.toLowerCase()
+    const userExp = String(userProfile.experienceLevel).toLowerCase()
+    const jobExp = String(job.experience).toLowerCase()
 
     if (jobExp.includes('fresher') && userExp.includes('fresher')) expScore = 15
     else if (jobExp === userExp) expScore = 15
