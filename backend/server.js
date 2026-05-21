@@ -511,13 +511,20 @@ app.post('/api/notifications/test', authMiddleware, async (req, res) => {
       results.sms = await sendSMSNotification(mappedUser.phone, msg)
     }
 
+    let msg = ''
+    if (results.email || results.sms) {
+      msg = `Notification sent! (${matches.length} matches found)`
+    } else if (matches.length === 0) {
+      msg = 'No matching jobs found to send. Upload a resume with skills to get matches!'
+    } else {
+      msg = 'Failed to send notification. Check your SMTP credentials or App Password.'
+    }
+
     res.json({
       success: true,
       matchCount: matches.length,
       notifications: results,
-      message: results.email || results.sms
-        ? `Notification sent! (${matches.length} matches found)`
-        : 'No notification channel configured. Add SMTP credentials to .env',
+      message: msg,
     })
   } catch (err) {
     res.status(500).json({ success: false, error: err.message })
