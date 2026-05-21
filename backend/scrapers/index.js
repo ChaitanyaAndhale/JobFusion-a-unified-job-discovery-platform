@@ -181,7 +181,13 @@ export async function scrapeAll() {
   // ─── Intelligent Cross-Source Deduplication ──────────────────
   const dedupMap = new Map()
 
-  for (const job of allJobs) {
+  for (let i = 0; i < allJobs.length; i++) {
+    // Yield to event loop to avoid blocking during heavy string processing
+    if (i > 0 && i % 500 === 0) {
+      await new Promise(r => setTimeout(r, 20))
+    }
+    
+    const job = allJobs[i]
     // Normalize company and title for dedup
     job.title = normalizeTitle(job.title) || job.title
     job.company = normalizeCompanyName(job.company) || job.company
@@ -218,13 +224,16 @@ export async function scrapeAll() {
     return dateB - dateA
   })
 
+  // Limit to top 2000 jobs for memory safety on Render Free Tier
+  const finalJobs = uniqueJobs.slice(0, 2000)
+
   // Update stats
   cacheStats = newStats
-  jobCache = uniqueJobs
+  jobCache = finalJobs
   global.__lastScrapeTime = new Date().toISOString()
 
   // Save to disk
-  saveCache(uniqueJobs, newStats)
+  saveCache(finalJobs, newStats)
 
   // Save to Supabase (if connected)
   if (isSupabaseConnected()) {
@@ -274,12 +283,12 @@ export async function scrapeAll() {
 
   const elapsed = ((Date.now() - startTime) / 1000).toFixed(1)
   const liveCount = Object.values(newStats).filter(v => v > 0).length
-  const indiaCount = uniqueJobs.filter(isIndiaJob).length
+  const indiaCount = finalJobs.filter(isIndiaJob).length
 
   console.log('\n═══════════════════════════════════════════════════')
   console.log(`   ✅ Scrape complete in ${elapsed}s`)
-  console.log(`   📊 Total: ${uniqueJobs.length} unique jobs from ${liveCount}/${Object.keys(newStats).length} platforms`)
-  console.log(`   🇮🇳 India jobs: ${indiaCount}`)
+  console.log(`   📊 Total: ${uniqueJobs.length} scraped, ${finalJobs.length} kept in memory from ${liveCount}/${Object.keys(newStats).length} platforms`)
+  console.log(`   🇮🇳 India jobs in memory: ${indiaCount}`)
   Object.entries(newStats).forEach(([src, count]) => {
     const icon = count > 0 ? '✅' : '⚠️'
     console.log(`      ${icon} ${src}: ${count}`)

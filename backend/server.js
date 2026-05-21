@@ -65,9 +65,16 @@ app.use(cors())
 app.use(express.json())
 
 app.get("/api/health", (req, res) => {
+  const mem = process.memoryUsage();
   res.status(200).json({
     status: "running",
-    service: "JobFusion Backend"
+    service: "JobFusion Backend",
+    uptime: process.uptime(),
+    memory: {
+      rss: `${Math.round(mem.rss / 1024 / 1024)} MB`,
+      heapTotal: `${Math.round(mem.heapTotal / 1024 / 1024)} MB`,
+      heapUsed: `${Math.round(mem.heapUsed / 1024 / 1024)} MB`,
+    }
   });
 });
 
@@ -525,7 +532,14 @@ async function checkAllUserMatches() {
   
   const { data: recentNotifs } = await supabase.from('notifications_log').select('*').gt('sent_at', yesterday)
 
-  for (const dbUser of users) {
+  for (let i = 0; i < users.length; i++) {
+    const dbUser = users[i]
+    
+    // Yield to the event loop every 10 users to prevent blocking the health endpoint
+    if (i > 0 && i % 10 === 0) {
+      await new Promise(resolve => setTimeout(resolve, 50));
+    }
+
     const user = mapUserToCamelCase(dbUser)
     if (!user.skills || user.skills.length === 0) continue
     if (!user.notificationPrefs || user.notificationPrefs.email === false) continue
@@ -883,8 +897,8 @@ app.get('*', (req, res) => {
 
 // ─── Scheduler ──────────────────────────────────────────
 
-// Scrape every 15 minutes to catch new jobs quickly
-cron.schedule('*/15 * * * *', async () => {
+// Scrape every 2 hours to avoid Render free-tier timeouts and IP bans
+cron.schedule('0 */2 * * *', async () => {
   console.log('⏰ Scheduled scrape running...')
   await scrapeAll()
   // Check for job matches after each scrape
@@ -896,18 +910,26 @@ cron.schedule('*/15 * * * *', async () => {
 
 async function boot() {
   console.log('🚀 JobFusion Backend starting...')
-  console.log('📡 Running initial scrape from all platforms...')
-  await scrapeAll()
-
-  // Check matches after initial scrape
-  setTimeout(() => checkAllUserMatches(), 5000)
-
+  
+  // Bind port immediately to prevent Render timeout
   app.listen(PORT, () => {
     console.log(`\n✅ JobFusion API running at http://localhost:${PORT}`)
-    console.log(`📊 ${getCache().length} jobs loaded from ${Object.keys(getCacheStats()).length} platforms`)
-    console.log(`🔄 Auto-refresh every 15 minutes`)
+    console.log(`🔄 Auto-refresh every 2 hours`)
     console.log(`🔔 Job match notifications enabled\n`)
   })
+
+  // Run initial heavy scraping in background
+  setTimeout(async () => {
+    try {
+      console.log('📡 Running initial scrape from all platforms...')
+      await scrapeAll()
+      console.log(`📊 ${getCache().length} jobs loaded from ${Object.keys(getCacheStats()).length} platforms`)
+      // Check matches after initial scrape
+      setTimeout(() => checkAllUserMatches(), 5000)
+    } catch (err) {
+      console.error('❌ Background scrape failed:', err)
+    }
+  }, 1000)
 }
 
 boot().catch(err => {
